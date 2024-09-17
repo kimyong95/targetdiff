@@ -9,6 +9,7 @@ from models.common import compose_context, ShiftedSoftplus
 from models.egnn import EGNN
 from models.uni_transformer import UniTransformerO2TwoUpdateGeneral
 
+from diffusers import DDPMScheduler, DDIMScheduler
 
 def get_refine_net(refine_net_type, config):
     if refine_net_type == 'uni_o2':
@@ -197,7 +198,7 @@ class SinusoidalPosEmb(nn.Module):
 # Model
 class ScorePosNet3D(nn.Module):
 
-    def __init__(self, config, protein_atom_feature_dim, ligand_atom_feature_dim):
+    def __init__(self, config, protein_atom_feature_dim, ligand_atom_feature_dim, scheduler="ddim"):
         super().__init__()
         self.config = config
 
@@ -309,6 +310,24 @@ class ScorePosNet3D(nn.Module):
             ShiftedSoftplus(),
             nn.Linear(self.hidden_dim, ligand_atom_feature_dim),
         )
+
+        ddpm = DDPMScheduler(
+            num_train_timesteps = config.num_diffusion_timesteps,
+            beta_start = config.beta_start,
+            beta_end = config.beta_end,
+            beta_schedule = config.beta_schedule,
+            clip_sample = False,
+            prediction_type = "sample",
+        )
+
+        assert torch.allclose(ddpm.betas, torch.tensor(betas).float())
+
+        if scheduler == "ddpm":
+            self.sampling_scheduler = ddpm
+        elif scheduler == "ddim":
+            self.sampling_scheduler = DDIMScheduler.from_config(ddpm.config, trained_betas=ddpm.betas.clone().detach())
+        else:
+            raise NotImplementedError()
 
     def forward(self, protein_pos, protein_v, batch_protein, init_ligand_pos, init_ligand_v, batch_ligand,
                 time_step=None, return_all=False, fix_x=False):
@@ -633,10 +652,23 @@ class ScorePosNet3D(nn.Module):
     @torch.no_grad()
     def sample_diffusion(self, protein_pos, protein_v, batch_protein,
                          init_ligand_pos, init_ligand_v, batch_ligand,
-                         num_steps=None, center_pos_mode=None, pos_only=False):
+                         num_steps=None, center_pos_mode=None, pos_only=False,
+                         noise=None, start_from_i=0,
+                         # ↓↓↓↓↓↓↓↓↓↓ edited ↓↓↓↓↓↓↓↓↓↓ #
+                         given_noise=None,
+                         # ↑↑↑↑↑↑↑↑↑↑ edited ↑↑↑↑↑↑↑↑↑↑ #
+                         ):
+
+        if noise is None:
+            noise = torch.randn((num_steps-start_from_i, *init_ligand_pos.shape), device=init_ligand_pos.device)
+        else:
+            assert noise.size() == (num_steps-start_from_i, *init_ligand_pos.shape)
 
         if num_steps is None:
             num_steps = self.num_timesteps
+        
+        self.sampling_scheduler.set_timesteps(num_steps)
+
         num_graphs = batch_protein.max().item() + 1
 
         protein_pos, init_ligand_pos, offset = center_pos(
@@ -644,11 +676,12 @@ class ScorePosNet3D(nn.Module):
 
         pos_traj, v_traj = [], []
         v0_pred_traj, vt_pred_traj = [], []
+        pos0_traj = []
         ligand_pos, ligand_v = init_ligand_pos, init_ligand_v
         # time sequence
-        time_seq = list(reversed(range(self.num_timesteps - num_steps, self.num_timesteps)))
-        for i in tqdm(time_seq, desc='sampling', total=len(time_seq)):
-            t = torch.full(size=(num_graphs,), fill_value=i, dtype=torch.long, device=protein_pos.device)
+        time_seq = self.sampling_scheduler.timesteps[start_from_i:]
+        for i, t_ in enumerate(tqdm(time_seq, desc='sampling', total=len(time_seq))):
+            t = torch.full(size=(num_graphs,), fill_value=t_, dtype=torch.long, device=protein_pos.device)
             preds = self(
                 protein_pos=protein_pos,
                 protein_v=protein_v,
@@ -670,13 +703,26 @@ class ScorePosNet3D(nn.Module):
             else:
                 raise ValueError
 
-            pos_model_mean = self.q_pos_posterior(x0=pos0_from_e, xt=ligand_pos, t=t, batch=batch_ligand)
-            pos_log_variance = extract(self.posterior_logvar, t, batch_ligand)
-            # no noise when t == 0
-            nonzero_mask = (1 - (t == 0).float())[batch_ligand].unsqueeze(-1)
-            ligand_pos_next = pos_model_mean + nonzero_mask * (0.5 * pos_log_variance).exp() * torch.randn_like(
-                ligand_pos)
-            ligand_pos = ligand_pos_next
+            original_pos0 = pos0_from_e + offset[batch_ligand]
+            pos0_traj.append(original_pos0.clone().cpu())
+            # ↓↓↓↓↓↓↓↓↓↓ edited ↓↓↓↓↓↓↓↓↓↓ #
+            if isinstance(self.sampling_scheduler, DDIMScheduler):
+                if given_noise is not None:
+                    ligand_pos = self.sampling_scheduler.step(pos0_from_e, t[0], ligand_pos, variance_noise=given_noise[i], eta=1.0).prev_sample
+                elif given_noise is None:
+                    ligand_pos = self.sampling_scheduler.step(pos0_from_e, t[0], ligand_pos, eta=1.0).prev_sample
+            elif isinstance(self.sampling_scheduler, DDPMScheduler):
+                assert given_noise is None, "DDPM scheduler does not support given noise"
+                ligand_pos = self.sampling_scheduler.step(pos0_from_e, t[0], ligand_pos).prev_sample
+            # ↑↑↑↑↑↑↑↑↑↑ edited ↑↑↑↑↑↑↑↑↑↑ #
+                
+            
+            # (replace by above diffusers scheduler)
+            # pos_model_mean = self.q_pos_posterior(x0=pos0_from_e, xt=ligand_pos, t=t, batch=batch_ligand)
+            # pos_log_variance = extract(self.posterior_logvar, t, batch_ligand)
+            # nonzero_mask = (1 - (t == 0).float())[batch_ligand].unsqueeze(-1) # no noise when t == 0
+            # ligand_pos_next = pos_model_mean + nonzero_mask * (0.5 * pos_log_variance).exp() * noise[i]
+            # ligand_pos = ligand_pos_next
 
             if not pos_only:
                 log_ligand_v_recon = F.log_softmax(v0_from_e, dim=-1)

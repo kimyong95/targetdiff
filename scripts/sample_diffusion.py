@@ -2,6 +2,7 @@ import argparse
 import os
 import shutil
 import time
+import einops
 
 import numpy as np
 import torch
@@ -10,12 +11,12 @@ from torch_geometric.transforms import Compose
 from torch_scatter import scatter_sum, scatter_mean
 from tqdm.auto import tqdm
 
-import utils.misc as misc
-import utils.transforms as trans
+import related_works.targetdiff.utils.misc as misc
+import related_works.targetdiff.utils.transforms as trans
 from datasets import get_dataset
 from datasets.pl_data import FOLLOW_BATCH
 from models.molopt_score_model import ScorePosNet3D, log_sample_categorical
-from utils.evaluation import atom_num
+from related_works.targetdiff.utils.evaluation import atom_num
 
 
 def unbatch_v_traj(ligand_v_traj, n_data, ligand_cum_atoms):
@@ -30,7 +31,12 @@ def unbatch_v_traj(ligand_v_traj, n_data, ligand_cum_atoms):
 
 def sample_diffusion_ligand(model, data, num_samples, batch_size=16, device='cuda:0',
                             num_steps=None, pos_only=False, center_pos_mode='protein',
-                            sample_num_atoms='prior'):
+                            sample_num_atoms='prior',
+                            # ↓↓↓↓↓↓↓↓↓↓ edited ↓↓↓↓↓↓↓↓↓↓ #
+                            epsilon = None,
+                            # ↑↑↑↑↑↑↑↑↑↑ edited ↑↑↑↑↑↑↑↑↑↑ #
+    ):
+
     all_pred_pos, all_pred_v = [], []
     all_pred_pos_traj, all_pred_v_traj = [], []
     all_pred_v0_traj, all_pred_vt_traj = [], []
@@ -60,7 +66,19 @@ def sample_diffusion_ligand(model, data, num_samples, batch_size=16, device='cud
             # init ligand pos
             center_pos = scatter_mean(batch.protein_pos, batch_protein, dim=0)
             batch_center_pos = center_pos[batch_ligand]
-            init_ligand_pos = batch_center_pos + torch.randn_like(batch_center_pos)
+            # ↓↓↓↓↓↓↓↓↓↓ edited ↓↓↓↓↓↓↓↓↓↓ #
+            if epsilon is None:
+                
+                noise = torch.randn_like(batch_center_pos) 
+            else:
+                assert sample_num_atoms == "ref"
+                assert len(epsilon) == num_steps + 1
+                assert all(ligand_num_atoms[0] == ligand_num_atoms[k] for k in range(1, n_data))
+                epsilon_i = einops.rearrange(epsilon[:,current_i:current_i+n_data], 'T B N D -> T (B N) D', B=n_data, N=ligand_num_atoms[0])
+                noise = epsilon_i[0]
+            # ↑↑↑↑↑↑↑↑↑↑ edited ↑↑↑↑↑↑↑↑↑↑ #
+
+            init_ligand_pos = batch_center_pos + noise
 
             # init ligand v
             if pos_only:
@@ -79,7 +97,11 @@ def sample_diffusion_ligand(model, data, num_samples, batch_size=16, device='cud
                 batch_ligand=batch_ligand,
                 num_steps=num_steps,
                 pos_only=pos_only,
-                center_pos_mode=center_pos_mode
+                center_pos_mode=center_pos_mode,
+                # ↓↓↓↓↓↓↓↓↓↓ edited ↓↓↓↓↓↓↓↓↓↓ #
+                # trajectory noise
+                given_noise = epsilon_i[1:] if epsilon is not None else None
+                # ↑↑↑↑↑↑↑↑↑↑ edited ↑↑↑↑↑↑↑↑↑↑ #
             )
             ligand_pos, ligand_v, ligand_pos_traj, ligand_v_traj = r['pos'], r['v'], r['pos_traj'], r['v_traj']
             ligand_v0_traj, ligand_vt_traj = r['v0_traj'], r['vt_traj']

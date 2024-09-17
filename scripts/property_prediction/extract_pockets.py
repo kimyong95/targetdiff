@@ -8,7 +8,7 @@ from rdkit import RDLogger
 from tqdm.auto import tqdm
 
 from datasets.protein_ligand import parse_sdf_file_mol, read_mol, KMAP
-from utils.data import PDBProtein
+from related_works.targetdiff.utils.data import PDBProtein
 
 RDLogger.DisableLog('rdApp.*')
 

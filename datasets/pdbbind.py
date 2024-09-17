@@ -5,7 +5,7 @@ import torch
 from torch.utils.data import Dataset
 from tqdm.auto import tqdm
 
-from utils.data import PDBProtein
+from related_works.targetdiff.utils.data import PDBProtein
 from datasets.protein_ligand import parse_sdf_file_mol
 from datasets.pl_data import ProteinLigandData, torchify_dict
 from scipy import stats

@@ -8,11 +8,12 @@ import torch
 from tqdm.auto import tqdm
 from glob import glob
 from collections import Counter
+import asyncio
 
-from utils.evaluation import eval_atom_type, scoring_func, analyze, eval_bond_length
-from utils import misc, reconstruct, transforms
-from utils.evaluation.docking_qvina import QVinaDockingTask
-from utils.evaluation.docking_vina import VinaDockingTask
+from related_works.targetdiff.utils.evaluation import eval_atom_type, scoring_func, analyze, eval_bond_length
+from related_works.targetdiff.utils import misc, reconstruct, transforms
+from related_works.targetdiff.utils.evaluation.docking_qvina import QVinaDockingTask
+from related_works.targetdiff.utils.evaluation.docking_vina import VinaDockingTask
 
 
 def print_dict(d, logger):
@@ -72,8 +73,19 @@ if __name__ == '__main__':
         all_pred_ligand_v = r['pred_ligand_v_traj']
         num_samples += len(all_pred_ligand_pos)
 
+        load_pred_pos_list = np.load(
+            "/home/tankim/code/finetune_stable_diffusion/pos_list.npy"
+        )
+
+        load_pred_v_list = np.load(
+            "/home/tankim/code/finetune_stable_diffusion/v_list.npy"
+        )
+
         for sample_idx, (pred_pos, pred_v) in enumerate(zip(all_pred_ligand_pos, all_pred_ligand_v)):
             pred_pos, pred_v = pred_pos[args.eval_step], pred_v[args.eval_step]
+
+            # pred_pos = load_pred_pos_list[sample_idx]
+            # pred_v = load_pred_v_list[sample_idx]
 
             # stability check
             pred_atom_type = transforms.get_atomic_number_from_index(pred_v, mode=args.atom_enc_mode)
@@ -111,8 +123,8 @@ if __name__ == '__main__':
                 elif args.docking_mode in ['vina_score', 'vina_dock']:
                     vina_task = VinaDockingTask.from_generated_mol(
                         mol, r['data'].ligand_filename, protein_root=args.protein_root)
-                    score_only_results = vina_task.run(mode='score_only', exhaustiveness=args.exhaustiveness)
-                    minimize_results = vina_task.run(mode='minimize', exhaustiveness=args.exhaustiveness)
+                    score_only_results = asyncio.run(vina_task.run(mode='score_only', exhaustiveness=args.exhaustiveness))
+                    minimize_results = asyncio.run(vina_task.run(mode='minimize', exhaustiveness=args.exhaustiveness))
                     vina_results = {
                         'score_only': score_only_results,
                         'minimize': minimize_results
@@ -124,7 +136,7 @@ if __name__ == '__main__':
                     vina_results = None
 
                 n_eval_success += 1
-            except:
+            except Exception as e:
                 if args.verbose:
                     logger.warning('Evaluation failed for %s' % f'{example_idx}_{sample_idx}')
                 continue

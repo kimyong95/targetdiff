@@ -1,3 +1,4 @@
+import aiohttp.client_exceptions
 from openbabel import pybel
 from meeko import MoleculePreparation
 from meeko import obutils
@@ -9,10 +10,46 @@ import tempfile
 import AutoDockTools
 import os
 import contextlib
+import requests
+import jsonpickle
+import time
+from io import StringIO
+import aiohttp
+import asyncio
+import json
 
-from utils.reconstruct import reconstruct_from_generated
-from utils.evaluation.docking_qvina import get_random_id, BaseDockingTask
+from related_works.targetdiff.utils.reconstruct import reconstruct_from_generated
+from related_works.targetdiff.utils.evaluation.docking_qvina import get_random_id, BaseDockingTask
+import uuid
+import pathlib
+import functools
 
+def retry(times, exceptions, backoff_factor=1):
+    """
+    Retry Decorator
+    Retries the wrapped function/method `times` times if the exceptions listed
+    in ``exceptions`` are thrown
+    :param times: The number of times to repeat the wrapped function/method
+    :type times: Int
+    :param Exceptions: Lists of exceptions that trigger a retry attempt
+    :type Exceptions: Tuple of Exceptions
+    """
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs):
+            attempt = 0
+            while attempt < times:
+                try:
+                    return await func(*args, **kwargs)
+                except exceptions as e:
+                    print(
+                        f"Exception {type(e)} thrown when attempting to run {func}, attempt {attempt} of {times}"
+                    )
+                    await asyncio.sleep(backoff_factor * 2**attempt)
+                    attempt += 1
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
 
 def supress_stdout(func):
     def wrapper(*a, **ka):
@@ -24,12 +61,7 @@ def supress_stdout(func):
 
 class PrepLig(object):
     def __init__(self, input_mol, mol_format):
-        if mol_format == 'smi':
-            self.ob_mol = pybel.readstring('smi', input_mol)
-        elif mol_format == 'sdf': 
-            self.ob_mol = next(pybel.readfile(mol_format, input_mol))
-        else:
-            raise ValueError(f'mol_format {mol_format} not supported')
+        self.ob_mol = pybel.readstring(mol_format, input_mol)
         
     def addH(self, polaronly=False, correctforph=True, PH=7): 
         self.ob_mol.OBMol.AddHydrogens(polaronly, correctforph, PH)
@@ -51,7 +83,6 @@ class PrepLig(object):
             return 
         else: 
             return preparator.write_pdbqt_string()
-        
 
 class PrepProt(object): 
     def __init__(self, pdb_file): 
@@ -78,9 +109,10 @@ class PrepProt(object):
 
 
 class VinaDock(object): 
-    def __init__(self, lig_pdbqt, prot_pdbqt): 
-        self.lig_pdbqt = lig_pdbqt
+    def __init__(self, lig_pdbqt_str, prot_pdbqt, web_dock_url=None): 
+        self.lig_pdbqt_str = lig_pdbqt_str
         self.prot_pdbqt = prot_pdbqt
+        self.web_dock_url = web_dock_url
     
     def _max_min_pdb(self, pdb, buffer):
         with open(pdb, 'r') as f: 
@@ -110,13 +142,34 @@ class VinaDock(object):
         self.pocket_center, self.box_size = self._max_min_pdb(ref, buffer)
         print(self.pocket_center, self.box_size)
 
-    def dock(self, score_func='vina', seed=0, mode='dock', exhaustiveness=8, save_pose=False, **kwargs):  # seed=0 mean random seed
-        v = Vina(sf_name=score_func, seed=seed, verbosity=0, **kwargs)
-        v.set_receptor(self.prot_pdbqt)
-        v.set_ligand_from_file(self.lig_pdbqt)
-        v.compute_vina_maps(center=self.pocket_center, box_size=self.box_size)
+    @retry(times=16, exceptions=(requests.ConnectionError, aiohttp.client_exceptions.ServerConnectionError, aiohttp.client_exceptions.ClientConnectorError, asyncio.exceptions.TimeoutError, aiohttp.client_exceptions.ClientResponseError))
+    async def web_dock(self):
+
+        prot_pdbqt_file = "/".join(self.prot_pdbqt.split("/")[-2:])
+        data = {
+            "prot_pdbqt_file": prot_pdbqt_file,
+            "lig_pdbqt_str": self.lig_pdbqt_str,
+            "pocket_center_json_pickle": jsonpickle.encode(self.pocket_center),
+            "box_size_json_pickle": jsonpickle.encode(self.box_size),
+        }
+        # r = requests.post(self.web_dock_url, json=data)
+        async with aiohttp.ClientSession() as session:
+            r = await session.post(self.web_dock_url, json=data)
+        r.raise_for_status()
+        r = json.loads(await r.read())
+        
+        return r['score']
+
+    async def dock(self, score_func='vina', seed=0, mode='dock', exhaustiveness=8, save_pose=False, **kwargs):  # seed=0 mean random seed
+        
+        if not bool(self.web_dock_url):
+            v = Vina(sf_name=score_func, seed=seed, verbosity=0, **kwargs)
+            v.set_receptor(self.prot_pdbqt)
+            v.set_ligand_from_string(self.lig_pdbqt_str)
+            v.compute_vina_maps(center=self.pocket_center, box_size=self.box_size)
+
         if mode == 'score_only': 
-            score = v.score()[0]
+            score = (await self.web_dock()) if bool(self.web_dock_url) else v.score()[0]
         elif mode == 'minimize':
             score = v.optimize()[0]
         elif mode == 'dock':
@@ -181,25 +234,23 @@ class VinaDockingTask(BaseDockingTask):
         return cls(protein_path, ligand_rdmol, **kwargs)
 
     def __init__(self, protein_path, ligand_rdmol, tmp_dir='./tmp', center=None,
-                 size_factor=1., buffer=5.0):
+                 size_factor=1., buffer=5.0, web_dock_url=False):
         super().__init__(protein_path, ligand_rdmol)
         # self.conda_env = conda_env
         self.tmp_dir = os.path.realpath(tmp_dir)
         os.makedirs(tmp_dir, exist_ok=True)
 
-        self.task_id = get_random_id()
+        self.task_id = str(uuid.uuid4())
         self.receptor_id = self.task_id + '_receptor'
         self.ligand_id = self.task_id + '_ligand'
 
         self.receptor_path = protein_path
-        self.ligand_path = os.path.join(self.tmp_dir, self.ligand_id + '.sdf')
 
         self.recon_ligand_mol = ligand_rdmol
         ligand_rdmol = Chem.AddHs(ligand_rdmol, addCoords=True)
 
-        sdf_writer = Chem.SDWriter(self.ligand_path)
-        sdf_writer.write(ligand_rdmol)
-        sdf_writer.close()
+        self.ligand_str = Chem.MolToMolBlock(ligand_rdmol)
+
         self.ligand_rdmol = ligand_rdmol
 
         pos = ligand_rdmol.GetConformer(0).GetPositions()
@@ -218,14 +269,15 @@ class VinaDockingTask(BaseDockingTask):
         self.output = None
         self.error_output = None
         self.docked_sdf_path = None
+        self.web_dock_url = web_dock_url
 
-    def run(self, mode='dock', exhaustiveness=8, **kwargs):
-        ligand_pdbqt = self.ligand_path[:-4] + '.pdbqt'
+    async def run(self, mode='dock', exhaustiveness=8, **kwargs):
+
         protein_pqr = self.receptor_path[:-4] + '.pqr'
         protein_pdbqt = self.receptor_path[:-4] + '.pdbqt'
 
-        lig = PrepLig(self.ligand_path, 'sdf')
-        lig.get_pdbqt(ligand_pdbqt)
+        lig = PrepLig(self.ligand_str, 'sdf')
+        ligand_pdbqt_str = lig.get_pdbqt()
 
         prot = PrepProt(self.receptor_path)
         if not os.path.exists(protein_pqr):
@@ -233,9 +285,10 @@ class VinaDockingTask(BaseDockingTask):
         if not os.path.exists(protein_pdbqt):
             prot.get_pdbqt(protein_pdbqt)
 
-        dock = VinaDock(ligand_pdbqt, protein_pdbqt)
+        dock = VinaDock(ligand_pdbqt_str, protein_pdbqt, web_dock_url=self.web_dock_url)
         dock.pocket_center, dock.box_size = self.center, [self.size_x, self.size_y, self.size_z]
-        score, pose = dock.dock(score_func='vina', mode=mode, exhaustiveness=exhaustiveness, save_pose=True, **kwargs)
+
+        score, pose = await dock.dock(score_func='vina', mode=mode, exhaustiveness=exhaustiveness, save_pose=True, **kwargs)
         return [{'affinity': score, 'pose': pose}]
 
 

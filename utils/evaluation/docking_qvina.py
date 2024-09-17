@@ -6,7 +6,7 @@ from easydict import EasyDict
 from rdkit import Chem
 from rdkit.Chem.rdForceFieldHelpers import UFFOptimizeMolecule
 
-from utils.reconstruct import reconstruct_from_generated
+from related_works.targetdiff.utils.reconstruct import reconstruct_from_generated
 
 
 def get_random_id(length=30):

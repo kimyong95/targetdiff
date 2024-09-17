@@ -7,7 +7,7 @@ from functools import partial
 
 from tqdm.auto import tqdm
 
-from utils.data import PDBProtein, parse_sdf_file
+from related_works.targetdiff.utils.data import PDBProtein, parse_sdf_file
 
 
 def load_item(item, path):

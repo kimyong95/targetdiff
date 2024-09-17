@@ -10,7 +10,7 @@ import utils.transforms as trans
 from datasets.pl_data import ProteinLigandData, torchify_dict
 from models.molopt_score_model import ScorePosNet3D
 from scripts.sample_diffusion import sample_diffusion_ligand
-from utils.data import PDBProtein
+from related_works.targetdiff.utils.data import PDBProtein
 from utils import reconstruct
 from rdkit import Chem
 

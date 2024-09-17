@@ -10,7 +10,7 @@ from torch_geometric.transforms import Compose
 import utils.misc as utils_misc
 from datasets.protein_ligand import KMAP, parse_sdf_file_mol
 from datasets.pl_data import ProteinLigandData, torchify_dict
-from utils.data import PDBProtein
+from related_works.targetdiff.utils.data import PDBProtein
 import utils.transforms_prop as utils_trans
 from utils.misc_prop import get_model
 
