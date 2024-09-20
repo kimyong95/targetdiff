@@ -9,7 +9,8 @@ from models.common import compose_context, ShiftedSoftplus
 from models.egnn import EGNN
 from models.uni_transformer import UniTransformerO2TwoUpdateGeneral
 
-from diffusers import DDPMScheduler, DDIMScheduler
+from diffusers import DDPMScheduler, DDIMScheduler, EulerDiscreteScheduler
+from utils.finetune_difussers import FinetuneEulerDiscreteScheduler
 
 def get_refine_net(refine_net_type, config):
     if refine_net_type == 'uni_o2':
@@ -198,7 +199,7 @@ class SinusoidalPosEmb(nn.Module):
 # Model
 class ScorePosNet3D(nn.Module):
 
-    def __init__(self, config, protein_atom_feature_dim, ligand_atom_feature_dim, scheduler="ddim"):
+    def __init__(self, config, protein_atom_feature_dim, ligand_atom_feature_dim, scheduler="eular"):
         super().__init__()
         self.config = config
 
@@ -326,6 +327,10 @@ class ScorePosNet3D(nn.Module):
             self.sampling_scheduler = ddpm
         elif scheduler == "ddim":
             self.sampling_scheduler = DDIMScheduler.from_config(ddpm.config, trained_betas=ddpm.betas.clone().detach())
+        elif scheduler == "eular":
+            self.sampling_scheduler = EulerDiscreteScheduler.from_config(ddpm.config, trained_betas=ddpm.betas.clone().detach())
+        elif scheduler == "finetune-eular":
+            self.sampling_scheduler = FinetuneEulerDiscreteScheduler.from_config(ddpm.config, trained_betas=ddpm.betas.clone().detach())
         else:
             raise NotImplementedError()
 
@@ -706,14 +711,24 @@ class ScorePosNet3D(nn.Module):
             original_pos0 = pos0_from_e + offset[batch_ligand]
             pos0_traj.append(original_pos0.clone().cpu())
             # ↓↓↓↓↓↓↓↓↓↓ edited ↓↓↓↓↓↓↓↓↓↓ #
-            if isinstance(self.sampling_scheduler, DDIMScheduler):
-                if given_noise is not None:
-                    ligand_pos = self.sampling_scheduler.step(pos0_from_e, t[0], ligand_pos, variance_noise=given_noise[i], eta=1.0).prev_sample
-                elif given_noise is None:
-                    ligand_pos = self.sampling_scheduler.step(pos0_from_e, t[0], ligand_pos, eta=1.0).prev_sample
-            elif isinstance(self.sampling_scheduler, DDPMScheduler):
+            if type(self.sampling_scheduler) == DDIMScheduler:
+                given_noise_i = given_noise[i] if given_noise is not None else None
+                pos0_from_e = self.sampling_scheduler.scale_model_input(pos0_from_e, t[0])
+                ligand_pos = self.sampling_scheduler.step(pos0_from_e, t[0], ligand_pos, variance_noise=given_noise_i, eta=1.0).prev_sample
+            elif type(self.sampling_scheduler) == DDIMScheduler:
                 assert given_noise is None, "DDPM scheduler does not support given noise"
+                pos0_from_e = self.sampling_scheduler.scale_model_input(pos0_from_e, t[0])
                 ligand_pos = self.sampling_scheduler.step(pos0_from_e, t[0], ligand_pos).prev_sample
+            elif type(self.sampling_scheduler) == EulerDiscreteScheduler:
+                assert given_noise is None, "Euler scheduler does not support given noise"
+                pos0_from_e = self.sampling_scheduler.scale_model_input(pos0_from_e, t[0])
+                ligand_pos = self.sampling_scheduler.step(pos0_from_e, t[0], ligand_pos, s_churn=0.01).prev_sample
+            elif type(self.sampling_scheduler) == FinetuneEulerDiscreteScheduler:
+                given_noise_i = given_noise[i] if given_noise is not None else None
+                pos0_from_e = self.sampling_scheduler.scale_model_input(pos0_from_e, t[0])
+                ligand_pos = self.sampling_scheduler.step(pos0_from_e, t[0], ligand_pos, s_churn=0.01, given_noise=given_noise_i).prev_sample
+            else:
+                raise NotImplementedError()
             # ↑↑↑↑↑↑↑↑↑↑ edited ↑↑↑↑↑↑↑↑↑↑ #
                 
             
