@@ -17,6 +17,7 @@ from io import StringIO
 import aiohttp
 import asyncio
 import json
+import random
 
 from related_works.targetdiff.utils.reconstruct import reconstruct_from_generated
 from related_works.targetdiff.utils.evaluation.docking_qvina import get_random_id, BaseDockingTask
@@ -45,7 +46,7 @@ def retry(times, exceptions, backoff_factor=1):
                     print(
                         f"Exception {type(e)} thrown when attempting to run {func}, attempt {attempt} of {times}"
                     )
-                    await asyncio.sleep(backoff_factor * 2**attempt)
+                    await asyncio.sleep(random.uniform(0, backoff_factor * 2**attempt))
                     attempt += 1
             return func(*args, **kwargs)
         return wrapper
@@ -154,7 +155,7 @@ class VinaDock(object):
         }
         # r = requests.post(self.web_dock_url, json=data)
         async with aiohttp.ClientSession() as session:
-            r = await session.post(self.web_dock_url, json=data)
+            r = await session.post(self.web_dock_url, json=data, timeout=5)
         r.raise_for_status()
         r = json.loads(await r.read())
         
@@ -162,7 +163,7 @@ class VinaDock(object):
 
     async def dock(self, score_func='vina', seed=0, mode='dock', exhaustiveness=8, save_pose=False, **kwargs):  # seed=0 mean random seed
         
-        if not bool(self.web_dock_url):
+        if not( mode == 'score_only' and bool(self.web_dock_url) ):
             v = Vina(sf_name=score_func, seed=seed, verbosity=0, **kwargs)
             v.set_receptor(self.prot_pdbqt)
             v.set_ligand_from_string(self.lig_pdbqt_str)
