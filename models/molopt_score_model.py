@@ -711,21 +711,19 @@ class ScorePosNet3D(nn.Module):
             original_pos0 = pos0_from_e + offset[batch_ligand]
             pos0_traj.append(original_pos0.clone().cpu())
             # ↓↓↓↓↓↓↓↓↓↓ edited ↓↓↓↓↓↓↓↓↓↓ #
+            pos0_from_e = self.sampling_scheduler.scale_model_input(pos0_from_e, t[0])
+            
             if type(self.sampling_scheduler) == DDIMScheduler:
                 given_noise_i = given_noise[i] if given_noise is not None else None
-                pos0_from_e = self.sampling_scheduler.scale_model_input(pos0_from_e, t[0])
                 ligand_pos = self.sampling_scheduler.step(pos0_from_e, t[0], ligand_pos, variance_noise=given_noise_i, eta=1.0).prev_sample
-            elif type(self.sampling_scheduler) == DDIMScheduler:
+            elif type(self.sampling_scheduler) == DDPMScheduler:
                 assert given_noise is None, "DDPM scheduler does not support given noise"
-                pos0_from_e = self.sampling_scheduler.scale_model_input(pos0_from_e, t[0])
                 ligand_pos = self.sampling_scheduler.step(pos0_from_e, t[0], ligand_pos).prev_sample
             elif type(self.sampling_scheduler) == EulerDiscreteScheduler:
                 assert given_noise is None, "Euler scheduler does not support given noise"
-                pos0_from_e = self.sampling_scheduler.scale_model_input(pos0_from_e, t[0])
                 ligand_pos = self.sampling_scheduler.step(pos0_from_e, t[0], ligand_pos, s_churn=0.01).prev_sample
             elif type(self.sampling_scheduler) == FinetuneEulerDiscreteScheduler:
                 given_noise_i = given_noise[i] if given_noise is not None else None
-                pos0_from_e = self.sampling_scheduler.scale_model_input(pos0_from_e, t[0])
                 ligand_pos = self.sampling_scheduler.step(pos0_from_e, t[0], ligand_pos, s_churn=0.01, given_noise=given_noise_i).prev_sample
             else:
                 raise NotImplementedError()
