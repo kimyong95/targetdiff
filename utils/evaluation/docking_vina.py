@@ -155,7 +155,7 @@ class VinaDock(object):
         }
         # r = requests.post(self.web_dock_url, json=data)
         async with aiohttp.ClientSession() as session:
-            r = await session.post(self.web_dock_url, json=data, timeout=5)
+            r = await session.post(self.web_dock_url, json=data, timeout=15)
         r.raise_for_status()
         r = json.loads(await r.read())
         
