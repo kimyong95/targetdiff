@@ -73,19 +73,8 @@ if __name__ == '__main__':
         all_pred_ligand_v = r['pred_ligand_v_traj']
         num_samples += len(all_pred_ligand_pos)
 
-        load_pred_pos_list = np.load(
-            "/home/tankim/code/finetune_stable_diffusion/pos_list.npy"
-        )
-
-        load_pred_v_list = np.load(
-            "/home/tankim/code/finetune_stable_diffusion/v_list.npy"
-        )
-
         for sample_idx, (pred_pos, pred_v) in enumerate(zip(all_pred_ligand_pos, all_pred_ligand_v)):
             pred_pos, pred_v = pred_pos[args.eval_step], pred_v[args.eval_step]
-
-            # pred_pos = load_pred_pos_list[sample_idx]
-            # pred_v = load_pred_v_list[sample_idx]
 
             # stability check
             pred_atom_type = transforms.get_atomic_number_from_index(pred_v, mode=args.atom_enc_mode)
