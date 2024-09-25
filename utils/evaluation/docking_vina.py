@@ -44,9 +44,9 @@ def retry(times, exceptions, backoff_factor=1):
                     return await func(*args, **kwargs)
                 except exceptions as e:
                     print(
-                        f"Exception {type(e)} thrown when attempting to run {func}, attempt {attempt} of {times}"
+                        f"Exception {type(e)}: [{str(e)}] thrown when attempting to run {func}, attempt {attempt} of {times}"
                     )
-                    await asyncio.sleep(random.uniform(0, backoff_factor * 2**attempt))
+                    await asyncio.sleep(random.uniform(0, 1+backoff_factor *attempt))
                     attempt += 1
             return func(*args, **kwargs)
         return wrapper
