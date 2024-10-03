@@ -166,16 +166,16 @@ class VinaDock(object):
 
     async def dock(self, score_func='vina', seed=0, mode='dock', exhaustiveness=8, save_pose=False, **kwargs):  # seed=0 mean random seed
         
-        if not( mode == 'minimize' and bool(self.web_dock_url) ):
+        if not( mode == 'score_only' and bool(self.web_dock_url) ):
             v = Vina(sf_name=score_func, seed=seed, verbosity=0, **kwargs)
             v.set_receptor(self.prot_pdbqt)
             v.set_ligand_from_string(self.lig_pdbqt_str)
             v.compute_vina_maps(center=self.pocket_center, box_size=self.box_size)
 
         if mode == 'score_only': 
-            score = v.score()[0]
+            score = (await self.web_dock()) if bool(self.web_dock_url) else v.score()[0]
         elif mode == 'minimize':
-            score = (await self.web_dock()) if bool(self.web_dock_url) else v.optimize()[0]
+            score = v.optimize()[0]
         elif mode == 'dock':
             v.dock(exhaustiveness=exhaustiveness, n_poses=1)
             score = v.energies(n_poses=1)[0][0]
@@ -186,9 +186,6 @@ class VinaDock(object):
             return score
         else: 
             if mode == 'score_only': 
-                pose = None 
-            elif mode == 'minimize' and bool(self.web_dock_url): 
-                # web dock does not support pose
                 pose = None
             elif mode == 'minimize': 
                 tmp = tempfile.NamedTemporaryFile()
