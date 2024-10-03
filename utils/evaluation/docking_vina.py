@@ -25,7 +25,7 @@ import uuid
 import pathlib
 import functools
 
-def retry(times, exceptions, backoff_factor=1):
+def retry(times, failed_return, exceptions, backoff_factor=1):
     """
     Retry Decorator
     Retries the wrapped function/method `times` times if the exceptions listed
@@ -48,7 +48,7 @@ def retry(times, exceptions, backoff_factor=1):
                     )
                     await asyncio.sleep(random.uniform(0, 1+backoff_factor *attempt))
                     attempt += 1
-            return func(*args, **kwargs)
+            return failed_return
         return wrapper
     return decorator
 
@@ -143,8 +143,11 @@ class VinaDock(object):
         self.pocket_center, self.box_size = self._max_min_pdb(ref, buffer)
         print(self.pocket_center, self.box_size)
 
-    @retry(times=16, exceptions=(requests.ConnectionError, aiohttp.client_exceptions.ServerConnectionError, aiohttp.client_exceptions.ClientConnectorError, asyncio.exceptions.TimeoutError, aiohttp.client_exceptions.ClientResponseError))
+    @retry(times=16, failed_return=0.0, exceptions=(RuntimeError, requests.ConnectionError, aiohttp.client_exceptions.ServerConnectionError, aiohttp.client_exceptions.ClientConnectorError, asyncio.exceptions.TimeoutError, aiohttp.client_exceptions.ClientResponseError))
     async def web_dock(self):
+        
+        # sleep for a while to avoid requests burst
+        await asyncio.sleep(random.uniform(0, 1))
 
         prot_pdbqt_file = "/".join(self.prot_pdbqt.split("/")[-2:])
         data = {

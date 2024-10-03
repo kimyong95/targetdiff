@@ -1,0 +1,12 @@
+gcloud functions deploy vina-dock \
+  --no-gen2 \
+  --memory=2GB \
+  --cpu=0.333 \
+  --min-instances=0 \
+  --max-instances=1000 \
+  --allow-unauthenticated \
+  --region=asia-northeast1 \
+  --runtime=python39 \
+  --source=source \
+  --entry-point=vina_dock \
+  --trigger-http
