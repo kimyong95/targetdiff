@@ -10,7 +10,7 @@ from models.egnn import EGNN
 from models.uni_transformer import UniTransformerO2TwoUpdateGeneral
 
 from diffusers import DDPMScheduler, DDIMScheduler, EulerDiscreteScheduler
-from utils.finetune_difussers import FinetuneEulerDiscreteScheduler
+from utils.guide_difussers import GuideEulerDiscreteScheduler
 
 def get_refine_net(refine_net_type, config):
     if refine_net_type == 'uni_o2':
@@ -329,8 +329,8 @@ class ScorePosNet3D(nn.Module):
             self.sampling_scheduler = DDIMScheduler.from_config(ddpm.config, trained_betas=ddpm.betas.clone().detach())
         elif scheduler == "eular":
             self.sampling_scheduler = EulerDiscreteScheduler.from_config(ddpm.config, trained_betas=ddpm.betas.clone().detach())
-        elif scheduler == "finetune-eular":
-            self.sampling_scheduler = FinetuneEulerDiscreteScheduler.from_config(ddpm.config, trained_betas=ddpm.betas.clone().detach())
+        elif scheduler == "guide-eular":
+            self.sampling_scheduler = GuideEulerDiscreteScheduler.from_config(ddpm.config, trained_betas=ddpm.betas.clone().detach())
         else:
             raise NotImplementedError()
 
@@ -722,7 +722,7 @@ class ScorePosNet3D(nn.Module):
             elif type(self.sampling_scheduler) == EulerDiscreteScheduler:
                 assert given_noise is None, "Euler scheduler does not support given noise"
                 ligand_pos = self.sampling_scheduler.step(pos0_from_e, t[0], ligand_pos, s_churn=0.01).prev_sample
-            elif type(self.sampling_scheduler) == FinetuneEulerDiscreteScheduler:
+            elif type(self.sampling_scheduler) == GuideEulerDiscreteScheduler:
                 given_noise_i = given_noise[i] if given_noise is not None else None
                 ligand_pos = self.sampling_scheduler.step(pos0_from_e, t[0], ligand_pos, s_churn=0.01, given_noise=given_noise_i).prev_sample
             else:
